@@ -21,10 +21,11 @@ Additionally, we provide an [example project](https://github.com/cpnota/all-exam
 
 ## High-Quality Reference Implementations
 
-The `autonomous-learning-library` separates reinforcement learning agents into two modules: `all.agents`, which provides flexible, high-level implementations of many common algorithms which can be adapted to new problems and environments, and `all.presets` which provides specific instansiations of these agents tuned for particular sets of environments, including Atari games, classic control tasks, and PyBullet robotics simulations. Some benchmark results showing results on-par with published results can be found below:
+The `autonomous-learning-library` separates reinforcement learning agents into two modules: `all.agents`, which provides flexible, high-level implementations of many common algorithms which can be adapted to new problems and environments, and `all.presets` which provides specific instansiations of these agents tuned for particular sets of environments, including Atari games, classic control tasks, and MuJoCo/Pybullet robotics simulations. Some benchmark results showing results on-par with published results can be found below:
 
-![atari40](benchmarks/atari40.png)
-![pybullet](benchmarks/pybullet.png)
+![atari40](benchmarks/atari_40m.png)
+![atari40](benchmarks/mujoco_v4.png)
+![pybullet](benchmarks/pybullet_v0.png)
 
 As of today, `all` contains implementations of the following deep RL algorithms:
 
@@ -46,24 +47,24 @@ It also contains implementations of the following "vanilla" agents, which provid
 ## Installation
 
 First, you will need a new version of [PyTorch](https://pytorch.org) (>1.3), as well as [Tensorboard](https://pypi.org/project/tensorboard/).
-Then, you can install the `autonomous-learning-library` through PyPi:
+Then, you can install the core `autonomous-learning-library` through PyPi:
 
 ```
 pip install autonomous-learning-library
 ```
 
-Alternately, you can install directly from this repository:
+You can also install all of the extras (such as Gym environments) using:
+
+```
+pip install autonomous-learning-library[all]
+```
+
+Finally, you can install directly from this repository including the dev dependencies using:
 
 ```
 git clone https://github.com/cpnota/autonomous-learning-library.git
 cd autonomous-learning-library
-pip install -e .
-```
-
-You can also install the prerequisites using:
-
-```
-pip install autonomous-learning-library[pytorch]
+pip install -e .[dev]
 ```
 
 ## Running the Presets
@@ -81,7 +82,7 @@ tensorboard --logdir runs
 ```
 
 and opening your browser to http://localhost:6006.
-Once the model is trained to your satisfaction, you can watch the trained model play using:
+Once the model is fully trained, you can watch the trained model play using:
 
 ```
 all-watch-atari Breakout "runs/a2c_[id]/preset.pt"

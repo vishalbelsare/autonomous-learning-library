@@ -1,25 +1,30 @@
 import os
-from all.logging import DummyWriter
-from all.experiments import SingleEnvExperiment, ParallelEnvExperiment, MultiagentEnvExperiment
-from all.presets import ParallelPreset, Preset
+
+from all.experiments import (
+    MultiagentEnvExperiment,
+    ParallelEnvExperiment,
+    SingleEnvExperiment,
+)
+from all.logging import DummyLogger
+from all.presets import ParallelPreset
 
 
 class TestSingleEnvExperiment(SingleEnvExperiment):
-    def _make_writer(self, logdir, agent_name, env_name, write_loss, writer):
+    def _make_logger(self, logdir, agent_name, env_name, verbose):
         os.makedirs(logdir, exist_ok=True)
-        return DummyWriter()
+        return DummyLogger()
 
 
 class TestParallelEnvExperiment(ParallelEnvExperiment):
-    def _make_writer(self, logdir, agent_name, env_name, write_loss, writer):
+    def _make_logger(self, logdir, agent_name, env_name, verbose):
         os.makedirs(logdir, exist_ok=True)
-        return DummyWriter()
+        return DummyLogger()
 
 
 class TestMultiagentEnvExperiment(MultiagentEnvExperiment):
-    def _make_writer(self, logdir, agent_name, env_name, write_loss, writer):
+    def _make_logger(self, logdir, agent_name, env_name, verbose):
         os.makedirs(logdir, exist_ok=True)
-        return DummyWriter()
+        return DummyLogger()
 
 
 def validate_agent(agent, env):

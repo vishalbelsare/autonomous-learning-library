@@ -1,8 +1,8 @@
-from all.logging import DummyWriter
+from all.logging import DummyLogger
 
 
 class Schedulable:
-    '''Allow "instance" descriptors to implement parameter scheduling.'''
+    """Allow "instance" descriptors to implement parameter scheduling."""
 
     def __getattribute__(self, name):
         value = object.__getattribute__(self, name)
@@ -17,13 +17,13 @@ class Scheduler:
 
 class LinearScheduler(Scheduler):
     def __init__(
-            self,
-            initial_value,
-            final_value,
-            decay_start,
-            decay_end,
-            name='variable',
-            writer=DummyWriter(),
+        self,
+        initial_value,
+        final_value,
+        decay_start,
+        decay_end,
+        name="variable",
+        logger=DummyLogger(),
     ):
         self._initial_value = initial_value
         self._final_value = final_value
@@ -31,11 +31,11 @@ class LinearScheduler(Scheduler):
         self._decay_end = decay_end
         self._i = -1
         self._name = name
-        self._writer = writer
+        self._logger = logger
 
     def __get__(self, instance, owner=None):
         result = self._get_value()
-        self._writer.add_schedule(self._name, result)
+        self._logger.add_schedule(self._name, result)
         return result
 
     def _get_value(self):
