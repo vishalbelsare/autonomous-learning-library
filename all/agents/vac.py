@@ -1,9 +1,11 @@
 from torch.nn.functional import mse_loss
-from ._agent import Agent
+
+from ._parallel_agent import ParallelAgent
+from .a2c import A2CTestAgent
 
 
-class VAC(Agent):
-    '''
+class VAC(ParallelAgent):
+    """
     Vanilla Actor-Critic (VAC).
     VAC is an implementation of the actor-critic alogorithm found in the Sutton and Barto (2018) textbook.
     This implementation tweaks the algorithm slightly by using a shared feature layer.
@@ -17,8 +19,9 @@ class VAC(Agent):
         discount_factor (float): Discount factor for future rewards.
         n_envs (int): Number of parallel actors/environments
         n_steps (int): Number of timesteps per rollout. Updates are performed once per rollout.
-        writer (Writer): Used for logging.
-    '''
+        logger (Logger): Used for logging.
+    """
+
     def __init__(self, features, v, policy, discount_factor=1):
         self.features = features
         self.v = v
@@ -28,14 +31,14 @@ class VAC(Agent):
         self._distribution = None
         self._action = None
 
-    def act(self, state, reward):
-        self._train(state, reward)
+    def act(self, state):
+        self._train(state, state.reward)
         self._features = self.features(state)
         self._distribution = self.policy(self._features)
         self._action = self._distribution.sample()
         return self._action
 
-    def eval(self, state, _):
+    def eval(self, state):
         return self.policy.eval(self.features.eval(state))
 
     def _train(self, state, reward):
@@ -44,14 +47,23 @@ class VAC(Agent):
             values = self.v(self._features)
 
             # compute targets
-            targets = reward + self.discount_factor * self.v.target(self.features.target(state))
+            targets = reward + self.discount_factor * self.v.target(
+                self.features.target(state)
+            )
             advantages = targets - values.detach()
 
             # compute losses
             value_loss = mse_loss(values, targets)
-            policy_loss = -(advantages * self._distribution.log_prob(self._action)).mean()
+            policy_loss = -(
+                advantages * self._distribution.log_prob(self._action)
+            ).mean()
+            loss = value_loss + policy_loss
 
             # backward pass
-            self.v.reinforce(value_loss)
-            self.policy.reinforce(policy_loss)
-            self.features.reinforce()
+            loss.backward()
+            self.v.step(loss=value_loss)
+            self.policy.step(loss=policy_loss)
+            self.features.step()
+
+
+VACTestAgent = A2CTestAgent

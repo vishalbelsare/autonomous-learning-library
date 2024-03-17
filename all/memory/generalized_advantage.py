@@ -1,15 +1,19 @@
 import torch
-from all.environments import State
 
-class GeneralizedAdvantageBuffer:
+from all.core import State
+from all.optim import Schedulable
+
+
+class GeneralizedAdvantageBuffer(Schedulable):
     def __init__(
-            self,
-            v,
-            features,
-            n_steps,
-            n_envs,
-            discount_factor=1,
-            lam=1
+        self,
+        v,
+        features,
+        n_steps,
+        n_envs,
+        discount_factor=1,
+        lam=1,
+        compute_batch_size=256,
     ):
         self.v = v
         self.features = features
@@ -18,6 +22,7 @@ class GeneralizedAdvantageBuffer:
         self.gamma = discount_factor
         self.lam = lam
         self._batch_size = self.n_steps * self.n_envs
+        self.compute_batch_size = compute_batch_size
         self._states = []
         self._actions = []
         self._rewards = []
@@ -39,26 +44,31 @@ class GeneralizedAdvantageBuffer:
         else:
             raise Exception("Buffer length exceeded: " + str(self.n_steps))
 
-    def advantages(self, states):
+    def advantages(self, next_states):
         if len(self) < self._batch_size:
             raise Exception("Not enough states received!")
 
-        self._states.append(states)
-        states = State.from_list(self._states[0:self.n_steps + 1])
-        actions = torch.cat(self._actions[:self.n_steps], dim=0)
-        rewards = torch.stack(self._rewards[:self.n_steps]).view(self.n_steps, -1)
-        _values = self.v.target(self.features.target(states)).view((self.n_steps + 1, -1))
-        values = _values[0:self.n_steps]
-        next_values = _values[1:self.n_steps + 1]
+        self._states.append(next_states)
+        states = State.array(self._states[0 : self.n_steps + 1])
+        actions = torch.cat(self._actions[: self.n_steps], dim=0)
+        rewards = torch.stack(self._rewards[: self.n_steps])
+
+        _values = (
+            states.flatten()
+            .batch_execute(
+                self.compute_batch_size,
+                lambda s: self.v.target(self.features.target(s)),
+            )
+            .view(states.shape)
+        )
+        values = _values[0 : self.n_steps]
+        next_values = _values[1:]
+
         td_errors = rewards + self.gamma * next_values - values
         advantages = self._compute_advantages(td_errors)
         self._clear_buffers()
 
-        return (
-            states[0:self._batch_size],
-            actions,
-            advantages
-        )
+        return (states[0:-1].flatten(), actions, advantages.view(-1))
 
     def _compute_advantages(self, td_errors):
         advantages = td_errors.clone()
@@ -69,10 +79,12 @@ class GeneralizedAdvantageBuffer:
         for i in range(self.n_steps):
             t = self.n_steps - 1 - i
             mask = self._states[t + 1].mask.float()
-            current_advantages = td_errors[t] + self.gamma * self.lam * current_advantages * mask
+            current_advantages = (
+                td_errors[t] + self.gamma * self.lam * current_advantages * mask
+            )
             advantages[t] = current_advantages
 
-        return advantages.view(-1)
+        return advantages
 
     def _clear_buffers(self):
         self._states = []

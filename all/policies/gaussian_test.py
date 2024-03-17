@@ -1,25 +1,28 @@
 import unittest
+
 import numpy as np
 import torch
-from torch import nn
 import torch_testing as tt
-from gym.spaces import Box
-from all.environments import State
+from gymnasium.spaces import Box
+from torch import nn
+
+from all.approximation import DummyCheckpointer
+from all.core import State
 from all.policies import GaussianPolicy
 
 STATE_DIM = 2
 ACTION_DIM = 3
 
+
 class TestGaussian(unittest.TestCase):
     def setUp(self):
-
         torch.manual_seed(2)
         self.space = Box(np.array([-1, -1, -1]), np.array([1, 1, 1]))
-        self.model = nn.Sequential(
-            nn.Linear(STATE_DIM, ACTION_DIM * 2)
-        )
+        self.model = nn.Sequential(nn.Linear(STATE_DIM, ACTION_DIM * 2))
         optimizer = torch.optim.RMSprop(self.model.parameters(), lr=0.01)
-        self.policy = GaussianPolicy(self.model, optimizer, self.space)
+        self.policy = GaussianPolicy(
+            self.model, optimizer, self.space, checkpointer=DummyCheckpointer()
+        )
 
     def test_output_shape(self):
         state = State(torch.randn(1, STATE_DIM))
@@ -44,7 +47,7 @@ class TestGaussian(unittest.TestCase):
 
     def test_converge(self):
         state = State(torch.randn(1, STATE_DIM))
-        target = torch.tensor([1., 2., -1.])
+        target = torch.tensor([1.0, 2.0, -1.0])
 
         for _ in range(0, 1000):
             dist = self.policy(state)
@@ -59,11 +62,13 @@ class TestGaussian(unittest.TestCase):
     def test_eval(self):
         state = State(torch.randn(1, STATE_DIM))
         dist = self.policy.no_grad(state)
-        tt.assert_almost_equal(dist.mean, torch.tensor([[-0.229, 0.43, -0.058]]), decimal=3)
-        tt.assert_almost_equal(dist.entropy(), torch.tensor([4.251]), decimal=3)
-        best = self.policy.eval(state)
-        tt.assert_almost_equal(best, torch.tensor([[-0.229, 0.43, -0.058]]), decimal=3)
+        tt.assert_almost_equal(
+            dist.mean, torch.tensor([[-0.237, 0.497, -0.058]]), decimal=3
+        )
+        tt.assert_almost_equal(dist.entropy(), torch.tensor([4.254]), decimal=3)
+        best = self.policy.eval(state).sample()
+        tt.assert_almost_equal(best, torch.tensor([[-0.888, -0.887, 0.404]]), decimal=3)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

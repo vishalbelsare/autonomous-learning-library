@@ -1,22 +1,26 @@
+import numpy as np
 import torch
 from torch import nn
-from torch.nn import *  # export everthing
+from torch.nn import *  # noqa
 from torch.nn import functional as F
-import numpy as np
-from all.environments import State
+
+""""A Pytorch Module"""
+Module = nn.Module
 
 
 class RLNetwork(nn.Module):
     """
     Wraps a network such that States can be given as input.
     """
+
     def __init__(self, model, _=None):
         super().__init__()
         self.model = model
         self.device = next(model.parameters()).device
 
     def forward(self, state):
-        return self.model(state.features.float()) * state.mask.float().unsqueeze(-1)
+        return state.apply(self.model, "observation")
+
 
 class Aggregation(nn.Module):
     """
@@ -25,8 +29,9 @@ class Aggregation(nn.Module):
     https://arxiv.org/abs/1511.06581
     This layer computes a Q function by combining
     an estimate of V with an estimate of the advantage.
-    The advantage is normalized by substracting the average
-    advantage so that we can propertly
+    The advantage is normalized by subtracting the average
+    advantage to force action-independent value to be
+    represented by value.
     """
 
     def forward(self, value, advantages):
@@ -44,7 +49,7 @@ class Dueling(nn.Module):
     """
 
     def __init__(self, value_model, advantage_model):
-        super(Dueling, self).__init__()
+        super().__init__()
         self.value_model = value_model
         self.advantage_model = advantage_model
         self.aggregation = Aggregation()
@@ -59,7 +64,7 @@ class CategoricalDueling(nn.Module):
     """Dueling architecture for C51/Rainbow"""
 
     def __init__(self, value_model, advantage_model):
-        super(CategoricalDueling, self).__init__()
+        super().__init__()
         self.value_model = value_model
         self.advantage_model = advantage_model
 
@@ -74,7 +79,7 @@ class CategoricalDueling(nn.Module):
         ).view((batch_size, -1))
 
 
-class Flatten(nn.Module):  # pylint: disable=function-redefined
+class Flatten(nn.Module):
     """
     Flatten a tensor, e.g., between conv2d and linear layers.
 
@@ -98,7 +103,7 @@ class NoisyLinear(nn.Linear):
     """
 
     def __init__(self, in_features, out_features, sigma_init=0.017, bias=True):
-        super(NoisyLinear, self).__init__(in_features, out_features, bias=bias)
+        super().__init__(in_features, out_features, bias=bias)
         self.sigma_weight = nn.Parameter(
             torch.Tensor(out_features, in_features).fill_(sigma_init)
         )
@@ -125,6 +130,7 @@ class NoisyLinear(nn.Linear):
             bias = bias + self.sigma_bias * self.epsilon_bias
         return F.linear(x, self.weight + self.sigma_weight * self.epsilon_weight, bias)
 
+
 class NoisyFactorizedLinear(nn.Linear):
     """
     NoisyNet layer with factorized gaussian noise
@@ -132,7 +138,9 @@ class NoisyFactorizedLinear(nn.Linear):
     N.B. nn.Linear already initializes weight and bias to
     """
 
-    def __init__(self, in_features, out_features, sigma_init=0.4, init_scale=3, bias=True):
+    def __init__(
+        self, in_features, out_features, sigma_init=0.4, init_scale=3, bias=True
+    ):
         self.init_scale = init_scale
         super().__init__(in_features, out_features, bias=bias)
         sigma_init = sigma_init / np.sqrt(in_features)
@@ -142,9 +150,7 @@ class NoisyFactorizedLinear(nn.Linear):
         self.register_buffer("epsilon_input", torch.zeros(1, in_features))
         self.register_buffer("epsilon_output", torch.zeros(out_features, 1))
         if bias:
-            self.sigma_bias = nn.Parameter(
-                torch.Tensor(out_features).fill_(sigma_init)
-            )
+            self.sigma_bias = nn.Parameter(torch.Tensor(out_features).fill_(sigma_init))
 
     def reset_parameters(self):
         std = np.sqrt(self.init_scale / self.in_features)
@@ -167,6 +173,7 @@ class NoisyFactorizedLinear(nn.Linear):
             bias = bias + self.sigma_bias * eps_out.t()
         noise_v = torch.mul(eps_in, eps_out)
         return F.linear(input, self.weight + self.sigma_weight * noise_v, bias)
+
 
 class Linear0(nn.Linear):
     def reset_parameters(self):
@@ -197,18 +204,26 @@ class TanhActionBound(nn.Module):
     def forward(self, x):
         return torch.tanh(x) * self.weight + self.bias
 
+
+class Float(nn.Module):
+    def forward(self, x):
+        return x.float()
+
+
 def td_loss(loss):
     def _loss(estimates, errors):
         return loss(estimates, errors + estimates.detach())
 
     return _loss
 
-def weighted_mse_loss(input, target, weight, reduction='mean'):
-    loss = (weight * ((target - input) ** 2))
-    return torch.mean(loss) if reduction == 'mean' else torch.sum(loss)
 
-def weighted_smooth_l1_loss(input, target, weight, reduction='mean'):
+def weighted_mse_loss(input, target, weight, reduction="mean"):
+    loss = weight * ((target - input) ** 2)
+    return torch.mean(loss) if reduction == "mean" else torch.sum(loss)
+
+
+def weighted_smooth_l1_loss(input, target, weight, reduction="mean"):
     t = torch.abs(input - target)
-    loss = torch.where(t < 1, 0.5 * t ** 2, t - 0.5)
+    loss = torch.where(t < 1, 0.5 * t**2, t - 0.5)
     loss = weight * loss
-    return torch.mean(loss) if reduction == 'mean' else torch.sum(loss)
+    return torch.mean(loss) if reduction == "mean" else torch.sum(loss)

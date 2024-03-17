@@ -26,12 +26,13 @@ Enjoy!
     guide/benchmark_performance
 
 .. toctree::
-    :maxdepth: 2
+    :maxdepth: 1
     :caption: Modules:
 
     modules/agents
     modules/approximation
     modules/bodies
+    modules/core
     modules/environments
     modules/experiments
     modules/logging

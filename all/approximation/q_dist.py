@@ -1,20 +1,22 @@
 import torch
 from torch.nn import functional as F
+
 from all import nn
+
 from .approximation import Approximation
 
 
 class QDist(Approximation):
     def __init__(
-            self,
-            model,
-            optimizer,
-            n_actions,
-            n_atoms,
-            v_min,
-            v_max,
-            name="q_dist",
-            **kwargs
+        self,
+        model,
+        optimizer,
+        n_actions,
+        n_atoms,
+        v_min,
+        v_max,
+        name="q_dist",
+        **kwargs
     ):
         device = next(model.parameters()).device
         self.n_actions = n_actions
@@ -23,7 +25,6 @@ class QDist(Approximation):
         super().__init__(model, optimizer, name=name, **kwargs)
 
     def project(self, dist, support):
-        # pylint: disable=invalid-name
         target_dist = dist * 0
         atoms = self.atoms
         v_min = atoms[0]
@@ -71,10 +72,16 @@ class QDistModule(torch.nn.Module):
     def forward(self, states, actions=None):
         values = self.model(states).view((len(states), self.n_actions, self.n_atoms))
         values = F.softmax(values, dim=2)
+        mask = states.mask
+
         # trick to convert to terminal without manually looping
-        values = (values - self.terminal) * states.mask.view(
-            (-1, 1, 1)
-        ).float() + self.terminal
+        if torch.is_tensor(mask):
+            values = (values - self.terminal) * states.mask.view(
+                (-1, 1, 1)
+            ).float() + self.terminal
+        else:
+            values = (values - self.terminal) * mask + self.terminal
+
         if actions is None:
             return values
         if isinstance(actions, list):

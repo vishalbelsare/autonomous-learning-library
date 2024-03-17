@@ -1,10 +1,14 @@
 import torch
 from torch.nn.functional import mse_loss
-from all.environments import State
+
+from all.core import State
+
 from ._agent import Agent
+from .a2c import A2CTestAgent
+
 
 class VPG(Agent):
-    '''
+    """
     Vanilla Policy Gradient (VPG/REINFORCE).
     VPG (also known as REINFORCE) is the least biased implementation of the policy gradient theorem.
     It uses complete episode rollouts as unbiased estimates of the Q-function, rather than the n-step
@@ -23,15 +27,9 @@ class VPG(Agent):
         min_batch_size (int): Updates will occurs when an episode ends after at least
             this many state-action pairs are seen. Set this to a large value in order
             to train on multiple episodes at once.
-    '''
-    def __init__(
-            self,
-            features,
-            v,
-            policy,
-            discount_factor=0.99,
-            min_batch_size=1
-    ):
+    """
+
+    def __init__(self, features, v, policy, discount_factor=0.99, min_batch_size=1):
         self.features = features
         self.v = v
         self.policy = policy
@@ -43,21 +41,21 @@ class VPG(Agent):
         self._log_pis = []
         self._rewards = []
 
-    def act(self, state, reward):
+    def act(self, state):
         if not self._features:
             return self._initial(state)
         if not state.done:
-            return self._act(state, reward)
-        return self._terminal(state, reward)
+            return self._act(state, state.reward)
+        return self._terminal(state, state.reward)
 
-    def eval(self, state, _):
+    def eval(self, state):
         return self.policy.eval(self.features.eval(state))
 
     def _initial(self, state):
         features = self.features(state)
         distribution = self.policy(features)
         action = distribution.sample()
-        self._features = [features.features]
+        self._features = [features]
         self._log_pis.append(distribution.log_prob(action))
         return action
 
@@ -65,16 +63,16 @@ class VPG(Agent):
         features = self.features(state)
         distribution = self.policy(features)
         action = distribution.sample()
-        self._features.append(features.features)
+        self._features.append(features)
         self._rewards.append(reward)
         self._log_pis.append(distribution.log_prob(action))
         return action
 
     def _terminal(self, state, reward):
         self._rewards.append(reward)
-        features = torch.cat(self._features)
+        features = State.array(self._features)
         rewards = torch.tensor(self._rewards, device=features.device)
-        log_pis = torch.cat(self._log_pis)
+        log_pis = torch.stack(self._log_pis)
         self._trajectories.append((features, rewards, log_pis))
         self._current_batch_size += len(features)
         self._features = []
@@ -89,31 +87,32 @@ class VPG(Agent):
 
     def _train(self):
         # forward pass
-        values = torch.cat([
-            self.v(State(features))
-            for (features, _, _)
-            in self._trajectories
-        ])
+        values = torch.cat(
+            [self.v(features) for (features, _, _) in self._trajectories]
+        )
 
         # forward passes for log_pis were stored during execution
         log_pis = torch.cat([log_pis for (_, _, log_pis) in self._trajectories])
 
         # compute targets
-        targets = torch.cat([
-            self._compute_discounted_returns(rewards)
-            for (_, rewards, _)
-            in self._trajectories
-        ])
+        targets = torch.cat(
+            [
+                self._compute_discounted_returns(rewards)
+                for (_, rewards, _) in self._trajectories
+            ]
+        )
         advantages = targets - values.detach()
 
         # compute losses
         value_loss = mse_loss(values, targets)
         policy_loss = -(advantages * log_pis).mean()
+        loss = value_loss + policy_loss
 
         # backward pass
-        self.v.reinforce(value_loss)
-        self.policy.reinforce(policy_loss)
-        self.features.reinforce()
+        loss.backward()
+        self.v.step(loss=value_loss)
+        self.policy.step(loss=policy_loss)
+        self.features.step()
 
         # cleanup
         self._trajectories = []
@@ -128,3 +127,6 @@ class VPG(Agent):
             returns[t] = discounted_return
             t -= 1
         return returns
+
+
+VPGTestAgent = A2CTestAgent

@@ -1,27 +1,27 @@
 import unittest
-import torch
+
 import numpy as np
+import torch
 import torch_testing as tt
-from gym.spaces import Box
+from gymnasium.spaces import Box
+
 from all import nn
-from all.environments import State
+from all.approximation import DummyCheckpointer
+from all.core import State
 from all.policies import SoftDeterministicPolicy
 
 STATE_DIM = 2
 ACTION_DIM = 3
 
+
 class TestSoftDeterministic(unittest.TestCase):
     def setUp(self):
         torch.manual_seed(2)
-        self.model = nn.Sequential(
-            nn.Linear0(STATE_DIM, ACTION_DIM * 2)
-        )
+        self.model = nn.Sequential(nn.Linear0(STATE_DIM, ACTION_DIM * 2))
         self.optimizer = torch.optim.RMSprop(self.model.parameters(), lr=0.01)
         self.space = Box(np.array([-1, -1, -1]), np.array([1, 1, 1]))
         self.policy = SoftDeterministicPolicy(
-            self.model,
-            self.optimizer,
-            self.space
+            self.model, self.optimizer, self.space, checkpointer=DummyCheckpointer()
         )
 
     def test_output_shape(self):
@@ -53,16 +53,29 @@ class TestSoftDeterministic(unittest.TestCase):
         self.assertLess(loss, 0.2)
 
     def test_scaling(self):
-        self.space = Box(np.array([-10, -5, 100]), np.array([10, -2, 200]))
-        self.policy = SoftDeterministicPolicy(
+        torch.manual_seed(0)
+        state = State(torch.randn(1, STATE_DIM))
+        policy1 = SoftDeterministicPolicy(
             self.model,
             self.optimizer,
-            self.space
+            Box(np.array([-1.0, -1.0, -1.0]), np.array([1.0, 1.0, 1.0])),
         )
-        state = State(torch.randn(1, STATE_DIM))
-        action, log_prob = self.policy(state)
-        tt.assert_allclose(action, torch.tensor([[-3.09055, -4.752777, 188.98222]]))
-        tt.assert_allclose(log_prob, torch.tensor([-0.397002]), rtol=1e-4)
+        action1, log_prob1 = policy1(state)
 
-if __name__ == '__main__':
+        # reset seed and sample same thing, but with different scaling
+        torch.manual_seed(0)
+        state = State(torch.randn(1, STATE_DIM))
+        policy2 = SoftDeterministicPolicy(
+            self.model,
+            self.optimizer,
+            Box(np.array([-2.0, -1.0, -1.0]), np.array([2.0, 1.0, 1.0])),
+        )
+        action2, log_prob2 = policy2(state)
+
+        # check scaling was correct
+        tt.assert_allclose(action1 * torch.tensor([2, 1, 1]), action2)
+        tt.assert_allclose(log_prob1 - np.log(2), log_prob2)
+
+
+if __name__ == "__main__":
     unittest.main()

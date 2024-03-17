@@ -1,52 +1,98 @@
+import gymnasium
 import torch
-import numpy as np
-import gym
-from .state import State
-from .gym import GymEnvironment
+
+from all.core import State
+
+from ._environment import Environment
 from .atari_wrappers import (
-    NoopResetEnv,
-    MaxAndSkipEnv,
     FireResetEnv,
-    WarpFrame,
     LifeLostEnv,
+    MaxAndSkipEnv,
+    NoopResetEnv,
+    WarpFrame,
 )
+from .duplicate_env import DuplicateEnvironment
 
 
-class AtariEnvironment(GymEnvironment):
-    def __init__(self, name, *args, **kwargs):
-        # need these for duplication
-        self._args = args
-        self._kwargs = kwargs
+class AtariEnvironment(Environment):
+    def __init__(self, name, device="cpu", **gym_make_kwargs):
+
         # construct the environment
-        env = gym.make(name + "NoFrameskip-v4")
+        env = gymnasium.make(name + "NoFrameskip-v4", **gym_make_kwargs)
+
         # apply a subset of wrappers
         env = NoopResetEnv(env, noop_max=30)
         env = MaxAndSkipEnv(env)
-        env = FireResetEnv(env)
+        if "FIRE" in env.unwrapped.get_action_meanings():
+            env = FireResetEnv(env)
         env = WarpFrame(env)
         env = LifeLostEnv(env)
-        # initialize
-        super().__init__(env, *args, **kwargs)
+
+        # initialize member variables
+        self._env = env
         self._name = name
+        self._state = None
+        self._action = None
+        self._reward = None
+        self._done = True
+        self._info = None
+        self._device = device
+
+    def reset(self):
+        self._state = State.from_gym(
+            self._env.reset(),
+            dtype=self._env.observation_space.dtype,
+            device=self._device,
+        )
+        return self._state
+
+    def step(self, action):
+        self._state = State.from_gym(
+            self._env.step(self._convert(action)),
+            dtype=self._env.observation_space.dtype,
+            device=self._device,
+        )
+        return self._state
+
+    def render(self, **kwargs):
+        return self._env.render(**kwargs)
+
+    def close(self):
+        return self._env.close()
+
+    def seed(self, seed):
+        self._env.seed(seed)
+
+    def duplicate(self, n):
+        return DuplicateEnvironment(
+            [AtariEnvironment(self._name, device=self._device) for _ in range(n)]
+        )
 
     @property
     def name(self):
         return self._name
 
-    def duplicate(self, n):
-        return [
-            AtariEnvironment(self._name, *self._args, **self._kwargs) for _ in range(n)
-        ]
+    @property
+    def state_space(self):
+        return self._env.observation_space
 
-    def _make_state(self, raw, done, info=None):
-        if info is None:
-            info = {"life_lost": False}
-        return State(
-            torch.from_numpy(
-                np.moveaxis(np.array(raw, dtype=self.state_space.dtype), -1, 0)
-            )
-            .unsqueeze(0)
-            .to(self._device),
-            self._done_mask if done else self._not_done_mask,
-            [info],
-        )
+    @property
+    def action_space(self):
+        return self._env.action_space
+
+    @property
+    def state(self):
+        return self._state
+
+    @property
+    def env(self):
+        return self._env
+
+    @property
+    def device(self):
+        return self._device
+
+    def _convert(self, action):
+        if torch.is_tensor(action):
+            return action.item()
+        return action

@@ -1,11 +1,23 @@
 install:
 	pip install -e .[dev]
+	AutoROM -y --quiet
+
+test: unit-test integration-test
+
+unit-test:
+	python -m unittest discover -s all -p "*test.py" -t .
+
+integration-test:
+	python -m unittest discover -s integration -p "*test.py"
 
 lint:
-	pylint all --rcfile=.pylintrc
+	black --check all benchmarks examples integration setup.py
+	isort --profile black --check all benchmarks examples integration setup.py
+	flake8 --select "F401" all benchmarks examples integration setup.py
 
-test:
-	python -m unittest discover -s all -p "*test.py"
+format:
+	black all benchmarks examples integration setup.py
+	isort --profile black all benchmarks examples integration setup.py
 
 tensorboard:
 	tensorboard --logdir runs

@@ -1,10 +1,13 @@
 from torch.nn.functional import mse_loss
-from all.logging import DummyWriter
+
+from all.logging import DummyLogger
 from all.memory import NStepAdvantageBuffer
+
 from ._agent import Agent
+from ._parallel_agent import ParallelAgent
 
 
-class A2C(Agent):
+class A2C(ParallelAgent):
     """
     Advantage Actor-Critic (A2C).
     A2C is policy gradient method in the actor-critic family.
@@ -22,18 +25,19 @@ class A2C(Agent):
         discount_factor (float): Discount factor for future rewards.
         n_envs (int): Number of parallel actors/environments
         n_steps (int): Number of timesteps per rollout. Updates are performed once per rollout.
-        writer (Writer): Used for logging.
+        logger (Logger): Used for logging.
     """
+
     def __init__(
-            self,
-            features,
-            v,
-            policy,
-            discount_factor=0.99,
-            entropy_loss_scaling=0.01,
-            n_envs=None,
-            n_steps=4,
-            writer=DummyWriter()
+        self,
+        features,
+        v,
+        policy,
+        discount_factor=0.99,
+        entropy_loss_scaling=0.01,
+        n_envs=None,
+        n_steps=4,
+        logger=DummyLogger(),
     ):
         if n_envs is None:
             raise RuntimeError("Must specify n_envs.")
@@ -41,7 +45,7 @@ class A2C(Agent):
         self.features = features
         self.v = v
         self.policy = policy
-        self.writer = writer
+        self.logger = logger
         # hyperparameters
         self.discount_factor = discount_factor
         self.entropy_loss_scaling = entropy_loss_scaling
@@ -53,15 +57,12 @@ class A2C(Agent):
         self._batch_size = n_envs * n_steps
         self._buffer = self._make_buffer()
 
-    def act(self, states, rewards):
-        self._buffer.store(self._states, self._actions, rewards)
+    def act(self, states):
+        self._buffer.store(self._states, self._actions, states.reward)
         self._train(states)
         self._states = states
         self._actions = self.policy.no_grad(self.features.no_grad(states)).sample()
         return self._actions
-
-    def eval(self, states, _):
-        return self.policy.eval(self.features.eval(states))
 
     def _train(self, next_states):
         if len(self._buffer) >= self._batch_size:
@@ -80,16 +81,20 @@ class A2C(Agent):
             value_loss = mse_loss(values, targets)
             policy_gradient_loss = -(distribution.log_prob(actions) * advantages).mean()
             entropy_loss = -distribution.entropy().mean()
-            policy_loss = policy_gradient_loss + self.entropy_loss_scaling * entropy_loss
+            policy_loss = (
+                policy_gradient_loss + self.entropy_loss_scaling * entropy_loss
+            )
+            loss = value_loss + policy_loss
 
             # backward pass
-            self.v.reinforce(value_loss)
-            self.policy.reinforce(policy_loss)
-            self.features.reinforce()
+            loss.backward()
+            self.v.step(loss=value_loss)
+            self.policy.step(loss=policy_loss)
+            self.features.step()
 
-            # debugging
-            self.writer.add_loss('policy_gradient', policy_gradient_loss.detach())
-            self.writer.add_loss('entropy', entropy_loss.detach())
+            # record metrics
+            self.logger.add_info("entropy", -entropy_loss)
+            self.logger.add_info("normalized_value_error", value_loss / targets.var())
 
     def _make_buffer(self):
         return NStepAdvantageBuffer(
@@ -97,6 +102,14 @@ class A2C(Agent):
             self.features,
             self.n_steps,
             self.n_envs,
-            discount_factor=self.discount_factor
+            discount_factor=self.discount_factor,
         )
- 
+
+
+class A2CTestAgent(Agent, ParallelAgent):
+    def __init__(self, features, policy):
+        self.features = features
+        self.policy = policy
+
+    def act(self, state):
+        return self.policy.eval(self.features.eval(state)).sample()

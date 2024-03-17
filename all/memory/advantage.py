@@ -1,5 +1,7 @@
 import torch
-from all.environments import State
+
+from all.core import State
+
 
 class NStepAdvantageBuffer:
     def __init__(self, v, features, n_steps, n_envs, discount_factor=1):
@@ -39,32 +41,22 @@ class NStepAdvantageBuffer:
         advantages = self._compute_advantages(states, rewards, next_states, lengths)
         self._clear_buffers()
 
-        return (
-            states,
-            actions,
-            advantages
-        )
+        return (states, actions, advantages)
 
     def _compute_returns(self):
         sample_returns = torch.zeros(
-            (self.n_steps, self.n_envs),
-            device=self._rewards[0].device
+            (self.n_steps, self.n_envs), device=self._rewards[0].device
         )
         sample_lengths = torch.zeros(
-            (self.n_steps, self.n_envs),
-            device=self._rewards[0].device
+            (self.n_steps, self.n_envs), device=self._rewards[0].device
         )
         current_returns = self._rewards[0] * 0
         current_lengths = current_returns.clone()
         for i in range(self.n_steps):
             t = self.n_steps - 1 - i
             mask = self._states[t + 1].mask.float()
-            current_returns = (
-                self._rewards[t] + self.gamma * current_returns * mask
-            )
-            current_lengths = (
-                1 + current_lengths * mask
-            )
+            current_returns = self._rewards[t] + self.gamma * current_returns * mask
+            current_lengths = 1 + current_lengths * mask
             sample_returns[t] = current_returns
             sample_lengths[t] = current_lengths
 
@@ -92,17 +84,17 @@ class NStepAdvantageBuffer:
                     next_state = state
 
         return (
-            State.from_list(sample_states),
+            State.array(sample_states),
             torch.stack(sample_actions),
-            State.from_list(sample_next_states)
+            State.array(sample_next_states),
         )
 
     def _compute_advantages(self, states, rewards, next_states, lengths):
         return (
             rewards.view(-1)
             + (self.gamma ** lengths.view(-1))
-            * self.v.target(self.features.target(next_states))
-            - self.v.eval(self.features.eval(states))
+            * self.v.target(self.features.target(next_states)).view(-1)
+            - self.v.eval(self.features.eval(states)).view(-1)
         )
 
     def _clear_buffers(self):

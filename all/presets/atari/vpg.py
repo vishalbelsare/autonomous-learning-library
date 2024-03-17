@@ -1,33 +1,50 @@
+import copy
+
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from all.agents import VPG
-from all.approximation import VNetwork, FeatureNetwork
+
+from all.agents import VPG, VPGTestAgent
+from all.approximation import FeatureNetwork, VNetwork
 from all.bodies import DeepmindAtariBody
-from all.logging import DummyWriter
+from all.logging import DummyLogger
 from all.policies import SoftmaxPolicy
-from .models import nature_features, nature_value_head, nature_policy_head
+from all.presets.atari.models import (
+    nature_features,
+    nature_policy_head,
+    nature_value_head,
+)
+from all.presets.builder import PresetBuilder
+from all.presets.preset import Preset
+
+default_hyperparameters = {
+    # Common settings
+    "discount_factor": 0.99,
+    # Adam optimizer settings
+    "lr_v": 5e-4,
+    "lr_pi": 1e-4,
+    "eps": 1.5e-4,
+    # Other optimization settings
+    "clip_grad": 0.5,
+    "value_loss_scaling": 0.25,
+    "min_batch_size": 1000,
+    # Model construction
+    "feature_model_constructor": nature_features,
+    "value_model_constructor": nature_value_head,
+    "policy_model_constructor": nature_policy_head,
+}
 
 
-def vpg(
-        # Common settings
-        device="cuda",
-        discount_factor=0.99,
-        last_frame=40e6,
-        # Adam optimizer settings
-        lr=7e-4,
-        eps=1.5e-4,
-        # Other optimization settings
-        clip_grad=0.5,
-        value_loss_scaling=0.25,
-        min_batch_size=1000,
-):
+class VPGAtariPreset(Preset):
     """
-    Vanilla Policy Gradient Atari preset.
+    Vanilla Policy Gradient (VPG) Atari preset.
 
     Args:
-        device (str): The device to load parameters and buffers onto for this agent.
+        env (all.environments.AtariEnvironment): The environment for which to construct the agent.
+        name (str): A human-readable name for the preset.
+        device (torch.device): The device on which to load the agent.
+
+    Keyword Args:
         discount_factor (float): Discount factor for future rewards.
-        last_frame (int): Number of frames to train.
         lr (float): Learning rate for the Adam optimizer.
         eps (float): Stability parameters for the Adam optimizer.
         clip_grad (float): The maximum magnitude of the gradient for any given parameter.
@@ -35,55 +52,78 @@ def vpg(
         value_loss_scaling (float): Coefficient for the value function loss.
         min_batch_size (int): Continue running complete episodes until at least this many
             states have been seen since the last update.
+        feature_model_constructor (function): The function used to construct the neural feature model.
+        value_model_constructor (function): The function used to construct the neural value model.
+        policy_model_constructor (function): The function used to construct the neural policy model.
     """
-    final_anneal_step = last_frame / (min_batch_size * 4)
 
-    def _vpg_atari(env, writer=DummyWriter()):
-        value_model = nature_value_head().to(device)
-        policy_model = nature_policy_head(env).to(device)
-        feature_model = nature_features().to(device)
+    def __init__(self, env, name, device, **hyperparameters):
+        super().__init__(name, device, hyperparameters)
+        self.value_model = hyperparameters["value_model_constructor"]().to(device)
+        self.policy_model = hyperparameters["policy_model_constructor"](env).to(device)
+        self.feature_model = hyperparameters["feature_model_constructor"]().to(device)
 
-        feature_optimizer = Adam(feature_model.parameters(), lr=lr, eps=eps)
-        value_optimizer = Adam(value_model.parameters(), lr=lr, eps=eps)
-        policy_optimizer = Adam(policy_model.parameters(), lr=lr, eps=eps)
+    def agent(self, logger=DummyLogger(), train_steps=float("inf")):
+        n_updates = train_steps / self.hyperparameters["min_batch_size"]
+
+        feature_optimizer = Adam(
+            self.feature_model.parameters(),
+            lr=self.hyperparameters["lr_pi"],
+            eps=self.hyperparameters["eps"],
+        )
+        value_optimizer = Adam(
+            self.value_model.parameters(),
+            lr=self.hyperparameters["lr_v"],
+            eps=self.hyperparameters["eps"],
+        )
+        policy_optimizer = Adam(
+            self.policy_model.parameters(),
+            lr=self.hyperparameters["lr_pi"],
+            eps=self.hyperparameters["eps"],
+        )
 
         features = FeatureNetwork(
-            feature_model,
+            self.feature_model,
             feature_optimizer,
-            scheduler=CosineAnnealingLR(
-                feature_optimizer,
-                final_anneal_step,
-            ),
-            clip_grad=clip_grad,
-            writer=writer
+            scheduler=CosineAnnealingLR(feature_optimizer, n_updates),
+            clip_grad=self.hyperparameters["clip_grad"],
+            logger=logger,
         )
+
         v = VNetwork(
-            value_model,
+            self.value_model,
             value_optimizer,
-            scheduler=CosineAnnealingLR(
-                value_optimizer,
-                final_anneal_step,
-            ),
-            loss_scaling=value_loss_scaling,
-            clip_grad=clip_grad,
-            writer=writer
+            scheduler=CosineAnnealingLR(value_optimizer, n_updates),
+            loss_scaling=self.hyperparameters["value_loss_scaling"],
+            clip_grad=self.hyperparameters["clip_grad"],
+            logger=logger,
         )
+
         policy = SoftmaxPolicy(
-            policy_model,
+            self.policy_model,
             policy_optimizer,
-            scheduler=CosineAnnealingLR(
-                policy_optimizer,
-                final_anneal_step,
-            ),
-            clip_grad=clip_grad,
-            writer=writer
+            scheduler=CosineAnnealingLR(policy_optimizer, n_updates),
+            clip_grad=self.hyperparameters["clip_grad"],
+            logger=logger,
         )
 
         return DeepmindAtariBody(
-            VPG(features, v, policy, discount_factor=discount_factor, min_batch_size=min_batch_size),
-            episodic_lives=True
+            VPG(
+                features,
+                v,
+                policy,
+                discount_factor=self.hyperparameters["discount_factor"],
+                min_batch_size=self.hyperparameters["min_batch_size"],
+            ),
         )
-    return _vpg_atari
+
+    def test_agent(self):
+        features = FeatureNetwork(copy.deepcopy(self.feature_model))
+        policy = SoftmaxPolicy(copy.deepcopy(self.policy_model))
+        return DeepmindAtariBody(VPGTestAgent(features, policy))
+
+    def parallel_test_agent(self):
+        return self.test_agent()
 
 
-__all__ = ["vpg"]
+vpg = PresetBuilder("vpg", default_hyperparameters, VPGAtariPreset)

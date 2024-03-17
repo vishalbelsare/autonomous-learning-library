@@ -1,6 +1,9 @@
 import copy
+
 import torch
+
 from .abstract import TargetNetwork
+
 
 class FixedTarget(TargetNetwork):
     def __init__(self, update_frequency):

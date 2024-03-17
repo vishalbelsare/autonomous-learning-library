@@ -1,15 +1,19 @@
-from .single_env_experiment import SingleEnvExperiment
+from all.presets import ParallelPreset
+
 from .parallel_env_experiment import ParallelEnvExperiment
+from .single_env_experiment import SingleEnvExperiment
 
 
 def run_experiment(
-        agents,
-        envs,
-        frames,
-        test_episodes=100,
-        render=False,
-        quiet=False,
-        write_loss=True,
+    agents,
+    envs,
+    frames,
+    logdir="runs",
+    quiet=False,
+    render=False,
+    save_freq=100,
+    test_episodes=100,
+    verbose=True,
 ):
     if not isinstance(agents, list):
         agents = [agents]
@@ -18,24 +22,27 @@ def run_experiment(
         envs = [envs]
 
     for env in envs:
-        for agent in agents:
-            make_experiment = get_experiment_type(agent)
+        for preset_builder in agents:
+            preset = preset_builder.env(env).build()
+            make_experiment = get_experiment_type(preset)
             experiment = make_experiment(
-                agent,
+                preset,
                 env,
-                render=render,
+                train_steps=frames,
+                logdir=logdir,
                 quiet=quiet,
-                write_loss=write_loss
+                render=render,
+                save_freq=save_freq,
+                verbose=verbose,
             )
+            experiment.save()
             experiment.train(frames=frames)
+            experiment.save()
             experiment.test(episodes=test_episodes)
+            experiment.close()
 
 
-def get_experiment_type(agent):
-    if is_parallel_env_agent(agent):
+def get_experiment_type(preset):
+    if isinstance(preset, ParallelPreset):
         return ParallelEnvExperiment
     return SingleEnvExperiment
-
-
-def is_parallel_env_agent(agent):
-    return isinstance(agent, tuple)

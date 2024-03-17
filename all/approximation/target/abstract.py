@@ -1,6 +1,6 @@
-from abc import abstractmethod, ABC
+from abc import ABC, abstractmethod
 
-# pylint: disable=arguments-differ
+
 class TargetNetwork(ABC):
     @abstractmethod
     def __call__(self, *inputs):

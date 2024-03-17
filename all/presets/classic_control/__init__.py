@@ -19,5 +19,5 @@ __all__ = [
     "vac",
     "vpg",
     "vqn",
-    "vsarsa"
+    "vsarsa",
 ]

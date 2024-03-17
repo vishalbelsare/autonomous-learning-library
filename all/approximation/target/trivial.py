@@ -1,5 +1,7 @@
 import torch
+
 from .abstract import TargetNetwork
+
 
 class TrivialTarget(TargetNetwork):
     def __init__(self):

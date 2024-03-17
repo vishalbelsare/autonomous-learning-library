@@ -1,10 +1,12 @@
 import torch
 from torch.nn.functional import mse_loss
+
 from ._agent import Agent
+from ._parallel_agent import ParallelAgent
 
 
-class VQN(Agent):
-    '''
+class VQN(ParallelAgent):
+    """
     Vanilla Q-Network (VQN).
     VQN is an implementation of the Q-learning algorithm found in the Sutton and Barto (2018) textbook.
     Q-learning algorithms attempt to learning the optimal policy while executing a (generally)
@@ -17,7 +19,8 @@ class VQN(Agent):
         q (QNetwork): An Approximation of the Q function.
         policy (GreedyPolicy): A policy derived from the Q-function.
         discount_factor (float): Discount factor for future rewards.
-    '''
+    """
+
     def __init__(self, q, policy, discount_factor=0.99):
         self.q = q
         self.policy = policy
@@ -25,14 +28,14 @@ class VQN(Agent):
         self._state = None
         self._action = None
 
-    def act(self, state, reward):
-        self._train(reward, state)
+    def act(self, state):
+        self._train(state.reward, state)
         action = self.policy.no_grad(state)
         self._state = state
         self._action = action
         return action
 
-    def eval(self, state, _):
+    def eval(self, state):
         return self.policy.eval(state)
 
     def _train(self, reward, next_state):
@@ -40,8 +43,19 @@ class VQN(Agent):
             # forward pass
             value = self.q(self._state, self._action)
             # compute target
-            target = reward + self.discount_factor * torch.max(self.q.target(next_state), dim=1)[0]
+            target = (
+                reward
+                + self.discount_factor * torch.max(self.q.target(next_state), dim=1)[0]
+            )
             # compute loss
             loss = mse_loss(value, target)
             # backward pass
             self.q.reinforce(loss)
+
+
+class VQNTestAgent(Agent, ParallelAgent):
+    def __init__(self, policy):
+        self.policy = policy
+
+    def act(self, state):
+        return self.policy.eval(state)

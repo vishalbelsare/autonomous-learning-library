@@ -12,12 +12,12 @@ To see what we mean by this, check out the OpenAI Baselines implementation of DQ
 There's a giant function called ``learn`` which accepts an environment and a bunch of hyperparameters, at the heart of which there is a control loop which calls many different functions.
 Which part of this function is the agent? Which part is the environment? Which part is something else?
 We call this implementation algorithm-based because the central abstraction is a function called ``learn`` which provides the complete specification of an algorithm.
-What should the proper abstraction for agent be, then? We have to look no further than the following famous diagram:
+What should the proper abstraction for agent be, then? We have to look no further than the following famous diagram from the Sutton and Barto textbook:
 
 .. image:: ./rl.jpg
 
 The definition of an ``Agent`` is simple.
-It accepts a state and a reward and returns an action.
+It accepts a state and reward, and returns an action.
 That's it.
 Everything else is an implementation detail.
 Here's the ``Agent`` interface in the autonomous-learning-library:
@@ -26,37 +26,62 @@ Here's the ``Agent`` interface in the autonomous-learning-library:
 
     class Agent(ABC):
         @abstractmethod
-        def act(self, state, reward):
-            pass
-
-        @abstractmethod
-        def eval(self, state, reward):
+        def act(self, state):
             pass
 
 The ``act`` function is called when training the agent.
-The ``eval`` function is called when evaluating the agent, e.g., after a training run has completed.
 When and how the ``Agent`` trains inside of this function is nobody's business except the ``Agent`` itself.
 When the ``Agent`` is allowed to act is determined by some outer control loop, and is not of concern to the ``Agent``.
 What might an implementation of ``act`` look like? Here's the act function from our DQN implementation:
 
 .. code-block:: python
 
-    def act(self, state, reward):
-        self._store_transition(self._state, self._action, reward, state)
+    def act(self, state):
+        self.replay_buffer.store(self._state, self._action, state)
         self._train()
         self._state = state
-        self._action = self.policy(state)
-        return self.action
+        self._action = self.policy.no_grad(state)
+        return self._action
 
-That's it. ``_store_transition()`` and ``_train()`` are private helper methods.
+That's it. ``_train()`` is a private helper methods.
 There is no reason for the control loop to know anything about these details.
 There is no tight coupling between the ``Agent`` and the control loop.
 This approach simplifies both our ``Agent`` implementation and the control loop itself.
 
 Separating the control loop logic from the ``Agent`` logic allows greater flexibility in the way agents are used.
 In fact, ``Agent`` is entirely decoupled from the ``Environment`` interface.
-This means that our agents can be used outside of standard research environments, such as part of a REST api, a multi-agent system, etc.
-Any code that passes a ``State`` and a scalar reward is compatible with our agents.
+This means that our agents can be used outside of standard research environments, such as part of a REST API, a multi-agent system, etc.
+Any code that passes a ``State`` is compatible with our agents.
+
+What is a ``State``?
+The ``State`` abstraction is part of ``all.core`` and it represents all of the information available to the agent at a given timestep.
+It contains some default entries, including ``state['observation']``, ``state['reward']``, and ``state['done']``, and ``state['mask']``.
+A ``StateArray`` object can be constucted by calling ``State.array(list_of_states)``, and provides an abstraction for batch processing of states.
+Arbitrary entries can be added to a ``State``, and use of the ``StateArray`` abstraction ensures that these entries are combined and sliced properly.
+The code does not need to be tightly coupled to the shape of the data, but rather can act on the abstraction. 
+
+Parallel Agents and Multiagents
+-------------------------------
+
+We described above the base ``Agent`` interface.
+However, some algorithms do not fit this interface.
+For example, a ``ParallelAgent`` accepts a ``StateArray`` rather than a ``State``.
+A ``Multiagent`` accepts a ``State`` object containing a special ``Agent`` key indicating to which of the multiagents the current state belongs,
+we we call a ``MultiagentState``.
+Nevertheless, we stick to the spirit of having a single ``act()`` function as closely as possible.
+The resulting interfaces are as follows:
+
+.. code-block:: python
+
+    class ParallelAgent(ABC):
+        @abstractmethod
+        def act(self, state_array):
+            pass
+
+    class Multiagent(ABC):
+        @abstractmethod
+        def act(self, multiagent_state):
+            pass
 
 Function Approximation
 ----------------------
@@ -109,14 +134,17 @@ Easy! Now let's look at the _train() function for our DQN agent:
 
     def _train(self):
         if self._should_train():
+            # sample transitions from buffer
             (states, actions, rewards, next_states, _) = self.replay_buffer.sample(self.minibatch_size)
 
             # forward pass
             values = self.q(states, actions)
+
+            # compute targets
             targets = rewards + self.discount_factor * torch.max(self.q.target(next_states), dim=1)[0]
 
             # compute loss
-            loss = mse_loss(values, targets)
+            loss = self.loss(values, targets)
 
             # backward pass
             self.q.reinforce(loss)
@@ -129,14 +157,14 @@ By encapsulating these details in ``Approximation``, we are able to follow the `
 
 A few other quick things to note: ``f.no_grad(x)`` runs a forward pass with ``torch.no_grad()``, speeding computation.
 ``f.eval(x)`` does the same, but also puts the model in `eval` mode first, (e.g., ``BatchNorm`` or ``Dropout`` layers), and then puts the model back into its previous mode before returning. 
-``f.target(x)`` calls the *target network* (an advanced concept used in algorithms such as DQN. S, for example, David Silver's `course notes <http://www0.cs.ucl.ac.uk/staff/d.silver/web/Talks_files/deep_rl.pdf>`_) associated with the ``Approximation``, also with ``torch.no_grad()``.
+``f.target(x)`` calls the *target network* (an advanced concept used in algorithms such as DQN. For example, David Silver's `course notes <http://www0.cs.ucl.ac.uk/staff/d.silver/web/Talks_files/deep_rl.pdf>`_) associated with the ``Approximation``, also with ``torch.no_grad()``.
 The ``autonomous-learning-library`` provides a few thin wrappers over ``Approximation`` for particular purposes, such as ``QNetwork``, ``VNetwork``, ``FeatureNetwork``, and several ``Policy`` implementations.
 
-Environments
-------------
+ALL Environments
+----------------
 
 The importance of the ``Environment`` in reinforcement learning nearly goes without saying.
-In the ``autonomous-learning-library``, the prepackaged environments are simply wrappers for `OpenAI Gym <http://gym.openai.com>`_, the defacto standard library for RL environments.
+In the ``autonomous-learning-library``, the prepackaged environments are simply wrappers for `Gymnasium <https://gymnasium.farama.org>`_ (formerly OpenAI Gym), the defacto standard library for RL environments.
 
 .. figure:: ./ale.png
 
@@ -145,7 +173,7 @@ In the ``autonomous-learning-library``, the prepackaged environments are simply 
 
 We add a few additional features:
 
-1) ``gym`` primarily uses ``numpy.array`` for representing states and actions. We automatically convert to and from ``torch.Tensor`` objects so that agent implemenetations need not consider the difference.
+1) ``gymnasium`` primarily uses ``numpy.array`` for representing states and actions. We automatically convert to and from ``torch.Tensor`` objects so that agent implemenetations need not consider the difference.
 2) We add properties to the environment for ``state``, ``reward``, etc. This simplifies the control loop and is generally useful.
 3) We apply common preprocessors, such as several standard Atari wrappers. However, where possible, we prefer to perform preprocessing using ``Body`` objects to maximize the flexibility of the agents.
 
@@ -153,17 +181,16 @@ Below, we show how several different types of environments can be created:
 
 .. code-block:: python
 
-    from all.environments import AtariEnvironment, GymEnvironment
+    from all.environments import AtariEnvironment, GymEnvironment, MujocoEnvironment
 
     # create an Atari environment on the gpu
     env = AtariEnvironment('Breakout', device='cuda')
 
-    # create a classic control environment on the compute
+    # create a classic control environment on the cpu
     env = GymEnvironment('CartPole-v0')
 
     # create a PyBullet environment on the cpu
-    import pybullet_envs
-    env = GymEnvironment('HalfCheetahBulletEnv-v0')
+    env = MujocoEnvironment('HalfCheetah-v4')
 
 Now we can write our first control loop:
 
@@ -175,12 +202,12 @@ Now we can write our first control loop:
     # Loop for some arbitrary number of timesteps.
     for timesteps in range(1000000):
         env.render()
-        action = agent.act(env.state, env.reward)
+        action = agent.act(env.state)
         env.step(action)
 
         if env.done:
             # terminal update
-            agent.act(env.state, env.reward)
+            agent.act(env.state)
 
             # reset the environment
             env.reset()
@@ -189,8 +216,8 @@ Of course, this control loop is not exactly feature-packed.
 Generally, it's better to use the ``Experiment`` module described later.
 
 
-Presets
--------
+ALL Presets
+-----------
 
 In the ``autonomous-learning-library``, agents are *compositional*, which means that the behavior of a given ``Agent`` depends on the behavior of several other objects.
 Users can compose agents with specific behavior by passing appropriate objects into the constructor of the high-level algorithms contained in ``all.agents``.
@@ -198,86 +225,76 @@ The library provides a number of functions which compose these objects in specif
 We call such a function a ``preset``, and several such presets are contained in the ``all.presets`` package.
 (This is an example of the more general `factory method pattern <https://en.wikipedia.org/wiki/Factory_method_pattern>`_).
 
-For example, ``all.agents.vqn`` contains a high-level description of a vanilla Q-learning algorithm.
-In order to actually apply this agent to a problem, for example, a classic control problem, we might define the following preset:
+
+For example, ``all.agents.dqn`` contains a high-level description of the DQN algorithm.
+However, how do we actually instansiate a particular network architecture, choose a learning rate, etc.?
+This is what presets are for.
+Before we dive into the details, let us show the simplest usage in practice:
 
 .. code-block:: python
 
-    # The outer function signature contains the set of hyperparameters
-    def vqn(
-        # Common settings
-        device="cpu",
-        # Hyperparameters
-        discount_factor=0.99,
-        lr=1e-2,
-        exploration=0.1,
-    ):
-        # The inner function creates a closure over the hyperparameters passed into the outer function.
-        # It accepts an "env" object which is passed right before the Experiment begins, as well as
-        # the writer created by the Experiment which defines the logging parameters.
-        def _vqn(env, writer=DummyWriter()):
-            # create a pytorch model
-            model = nn.Sequential(
-                nn.Linear(env.state_space.shape[0], 64),
-                nn.ReLU(),
-                nn.Linear(64, env.action_space.n),
-            ).to(device)
+    from all.presets.atari import dqn
+    from all.environments import AtariEnvironment
+    
+    # create an environment
+    env = AtariEnvironment('Breakout')
 
-            # create a pytorch optimizer for the model
-            optimizer = Adam(model.parameters(), lr=lr)
+    # configure and build the preset
+    preset = dqn.env(env).build()
 
-            # create an Approximation of the Q-function
-            q = QNetwork(model, optimizer, writer=writer)
+    # use the preset to create an agent
+    agent = preset.agent()
 
-            # create a Policy object derived from the Q-function
-            policy = GreedyPolicy(q, env.action_space.n, epsilon=exploration)
-
-            # instansiate the agent
-            return VQN(q, policy, discount_factor=discount_factor)
-
-        # return the inner function
-        return _vqn
-
-Notice how there is an "outer function" and an "inner" function.
-This approach allows the separation of configuration and instansiation.
-While this may seem redundant, it can sometimes be useful.
-For example, suppose we want to run the same agent on multiple environments.
-This can be done as follows:
+Instansiating the Agent is separated into two steps:
+First we configure and build the ``Preset``, then we use the configured ``Preset`` to instansiate an ``Agent``.
+Let's dig into the ``Preset`` interface first:
 
 .. code-block:: python
 
-    agent = vqn()
-    envs = [, GymEnvironment('MountainCar-v0')]
-    some_custom_runner(agent(), GymEnvironment('CartPole-v0'))
-    some_custom_runner(agent(), GymEnvironment('MountainCar-v0'))
+    class Preset(ABC):
+        @abstractmethod
+        def agent(self, logger=None, train_steps=float('inf')):
+            pass
 
-Now, each call to ``some_custom_runner`` receives a unique instance of the agent.
-This is sometimes achieved in other libraries by providing a "reset" function.
-We find our approach allows us to keep the ``Agent`` interface clean,
-and is overall more elegant and less error prone.
+        @abstractmethod
+        def test_agent(self):
+            pass
 
-Experiment
-----------
+        def save(self, filename):
+            return torch.save(self, filename)
+
+
+The ``agent()`` method instansiates a training ``Agent``.
+The ``test_agent()`` method instansiates a test-mode ``Agent`` using the same network parameters as the training ``Agent``.
+The ``save()`` then allows the ``Preset`` to be saved to a disk.
+Critically, all agents created by a given instance of a ``Preset`` share the underlying network parameters.
+The test agents, however, will instead copy the parameters, allowing test agents to be compared from multiple points in training.
+If a ``Preset`` is loaded from disk, then we can instansiate a test ``Agent`` using the pre-trained parameters.
+
+
+
+
+ALL Experiments
+---------------
 
 Finally, we have all of the components necessary to introduce the ``run_experiment`` helper function.
 ``run_experiment`` is the built-in control loop for running reinforcement learning experiment.
-It instansiates its own ``Writer`` object, which is then passed to each of the agents, and runs each agent on each environment passed to it for some number of timesteps (frames) or episodes).
+It instansiates its own ``Logger`` object for logging, which is then passed to each of the presets, and runs each agent on each environment passed to it for some number of timesteps (frames) or episodes).
 Here is a quick example:
 
 .. code-block:: python
 
-    from gym import envs
     from all.experiments import run_experiment
     from all.presets import atari
     from all.environments import AtariEnvironment
 
     agents = [
-        atari.dqn(),
-        atari.ddqn(),
-        atari.c51(),
-        atari.rainbow(),
-        atari.a2c(),
-        atari.ppo(),
+        atari.dqn,
+        atari.ddqn,
+        atari.c51,
+        atari.rainbow,
+        atari.a2c,
+        atari.ppo,
     ]
 
     envs = [AtariEnvironment(env, device='cuda') for env in ['BeamRider', 'Breakout', 'Pong', 'Qbert', 'SpaceInvaders']]
@@ -295,7 +312,7 @@ You can view the results in ``tensorboard`` by running the following command:
 
     tensorboard --logdir runs
 
-In addition to the ``tensorboard`` logs, every 100 episodes, the mean and standard deviation of the previous 100 episode returns are written to ``runs/[agent]/[env]/returns100.csv``.
+In addition to the ``tensorboard`` logs, every 100 episodes, the mean, standard deviation, min, and max of the previous 100 episode returns are written to ``runs/[agent]/[env]/returns100.csv``.
 This is much faster to read and plot than Tensorboard's proprietary format.
 The library contains an automatically plotting utility that generates appropriate plots for an *entire* ``runs`` directory as follows:
 
@@ -306,7 +323,7 @@ The library contains an automatically plotting utility that generates appropriat
 
 This will generate a plot that looks like the following (after tweaking the whitespace through the ``matplotlib`` UI):
 
-.. image:: ../../../benchmarks/atari40.png
+.. image:: ../../../benchmarks/atari_40m.png
 
 An optional parameter is ``test_episodes``, which is set to 100 by default.
 After running for the given number of frames, the agent will be evaluated for a number of episodes specified by ``test_episodes`` with training disabled.
@@ -315,7 +332,7 @@ This is useful measuring the final performance of an agent.
 You can also pass optional parameters to ``run_experiment`` to change its behavior.
 You can set ``render=True`` to watch the agent during training (generally not recommended: it slows the agent considerably!).
 You can set ``quiet=True`` to silence command line output.
-Lastly, you can set ``write_loss=False`` to disable writing debugging information to ``tensorboard``.
+Lastly, you can set ``verbose=False`` to disable writing loss and debugging information to ``tensorboard``.
 These files can become large, so this is recommended if you have limited storage!
 
 Finally, ``run_experiment`` relies on an underlying ``Experiment`` API.
